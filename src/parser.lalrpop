@@ -1,0 +1,87 @@
+use crate::ast::{Var, Expr, Opcode, Module, Function};
+use crate::lexer::Token;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = String;
+    enum Token {
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        "{" => Token::LBrace,
+        "}" => Token::RBrace,
+        "+" => Token::Plus,
+        "-" => Token::Minus,
+        "*" => Token::Star,
+        "/" => Token::Slash,
+        "let" => Token::Let,
+        "=" => Token::Assign,
+        "in" => Token::In,
+        "fun" => Token::Function,
+        Integer => Token::Number(<i32>),
+        Identifier => Token::Identifier(<String>),
+    }
+}
+
+pub Module: Module = { 
+    <functions: Function*> => Module(functions),
+};
+
+Function: Function = { 
+    "fun" <fun_name: Identifier> "(" <params: Identifier*> ")" "{" <body: Expr> "}" => Function {
+        name: Var(fun_name),
+        params: params.into_iter().map(Var).collect(),
+        body,
+    }
+};
+
+Expr: Expr = {
+    LetExpr
+};
+
+LetExpr: Expr = {
+    "let" <bound_var: Identifier> "=" <bound_expr: Expr> "in" <body: Expr> => Expr::LetBinding {
+        bound_var: Var(bound_var),
+        bound_expr: Box::new(bound_expr),
+        body: Box::new(body),
+    },
+    AddExpr,
+};
+
+AddExpr: Expr = {
+    <l: AddExpr> "+" <r: MulExpr> => Expr::Op {
+        op: Opcode::Add,
+        left: Box::new(l),
+        right: Box::new(r)
+    },
+    <l: AddExpr> "-" <r: MulExpr> => Expr::Op {
+        op: Opcode::Sub,
+        left: Box::new(l),
+        right: Box::new(r)
+    },
+    MulExpr,
+};
+
+MulExpr: Expr = {
+    <l: MulExpr> "*" <r: AtomExpr> => Expr::Op {
+        op: Opcode::Mul,
+        left: Box::new(l),
+        right: Box::new(r)
+    },
+    <l: MulExpr> "/" <r: AtomExpr> => Expr::Op {
+        op: Opcode::Div,
+        left: Box::new(l),
+        right: Box::new(r)
+    },
+    AtomExpr,
+};
+
+AtomExpr: Expr = {
+    <Integer> => Expr::Number(<>),
+    <Identifier> => Expr::Var(Var(<>)),
+    <fun_name: Identifier> "(" <args: Expr*> ")" => Expr::Apply { 
+        fun_name: Var(fun_name), 
+        args
+    },
+};
