@@ -2,7 +2,7 @@ use logos::{Lexer, Logos};
 
 #[derive(Logos, Debug, Clone, PartialEq)]
 pub enum Token {
-    // Operators
+    // Arithmetic operators
     #[token("+")]
     Plus,
     #[token("-")]
@@ -12,7 +12,18 @@ pub enum Token {
     #[token("/")]
     Slash,
 
-    // Parens
+    // Comparison operators
+    #[token("==")]
+    Equal,
+    #[token("!=")]
+    NotEqual,
+    #[token("<=")]
+    LessEqual,
+    #[token(">=")]
+    GreaterEqual,
+    // Note: < and > are already defined as LAngle and RAngle for generics
+
+    // Parens and delimiters
     #[token("(")]
     LParen,
     #[token(")")]
@@ -23,6 +34,18 @@ pub enum Token {
     RBrace,
     #[token(",")]
     Comma,
+    #[token("<")]
+    LAngle,
+    #[token(">")]
+    RAngle,
+    #[token("|")]
+    Pipe,
+
+    // Type syntax
+    #[token(":")]
+    Colon,
+    #[token("->")]
+    Arrow,
 
     // Variables bindings
     #[token("let")]
@@ -36,13 +59,54 @@ pub enum Token {
     #[token("fun")]
     Function,
 
+    // Conditionals
+    #[token("if")]
+    If,
+    #[token("then")]
+    Then,
+    #[token("else")]
+    Else,
+
+    // Type keywords (higher priority than identifiers)
+    #[token("int", priority = 2)]
+    TypeInt,
+    #[token("bool", priority = 2)]
+    TypeBool,
+    #[token("string", priority = 2)]
+    TypeString,
+    #[token("unit", priority = 2)]
+    TypeUnit,
+    #[token("float", priority = 2)]
+    TypeFloat,
+
+    // Boolean literals
+    #[token("true", priority = 2)]
+    True,
+    #[token("false", priority = 2)]
+    False,
+
+    // Type variables (OCaml style: 'a, 'b, etc.) - must come before identifiers
+    #[regex(r"'[a-z][a-z0-9_]*", |lex| lex.slice()[1..].to_string(), priority = 3)]
+    TypeVar(String),
+
     // Identifiers
-    #[regex(r"[a-zA-Z][a-zA-Z0-9_']*", |lex| lex.slice().to_string(), priority = 1)]
+    #[regex(r"[a-zA-Z][a-zA-Z0-9_]*", |lex| lex.slice().to_string(), priority = 1)]
     Identifier(String),
 
-    // Numbers
+    // Float literals (must come before integers)
+    #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().unwrap_or(0.0), priority = 2)]
+    FloatLit(f64),
+
+    // Integer literals
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i32>().unwrap_or(0))]
     Number(i32),
+
+    // String literals
+    #[regex(r#""([^"\\]|\\.)*""#, |lex| {
+        let s = lex.slice();
+        s[1..s.len()-1].to_string()
+    })]
+    StringLit(String),
 
     // Skip whitespace
     #[regex(r"[ \t\n\r]+", logos::skip)]
@@ -206,6 +270,63 @@ mod tests {
             Token::Number(1),
             Token::Plus,
             Token::Number(2),
+        ]);
+    }
+
+    #[test]
+    fn test_tokenize_angle_brackets() {
+        let tokens = tokenize("< >");
+        assert_eq!(tokens, vec![Token::LAngle, Token::RAngle]);
+    }
+
+    #[test]
+    fn test_tokenize_generic_function() {
+        let tokens = tokenize("fun id<T>(x) { x }");
+        assert_eq!(tokens, vec![
+            Token::Function,
+            Token::Identifier("id".to_string()),
+            Token::LAngle,
+            Token::Identifier("T".to_string()),
+            Token::RAngle,
+            Token::LParen,
+            Token::Identifier("x".to_string()),
+            Token::RParen,
+            Token::LBrace,
+            Token::Identifier("x".to_string()),
+            Token::RBrace,
+        ]);
+    }
+
+    #[test]
+    fn test_tokenize_generic_function_multiple_type_params() {
+        let tokens = tokenize("fun pair<T, U>(a, b)");
+        assert_eq!(tokens, vec![
+            Token::Function,
+            Token::Identifier("pair".to_string()),
+            Token::LAngle,
+            Token::Identifier("T".to_string()),
+            Token::Comma,
+            Token::Identifier("U".to_string()),
+            Token::RAngle,
+            Token::LParen,
+            Token::Identifier("a".to_string()),
+            Token::Comma,
+            Token::Identifier("b".to_string()),
+            Token::RParen,
+        ]);
+    }
+
+    #[test]
+    fn test_tokenize_generic_function_call() {
+        let tokens = tokenize("id<int>(5)");
+        assert_eq!(tokens, vec![
+            Token::Identifier("id".to_string()),
+            Token::LAngle,
+            Token::TypeInt,
+            Token::RAngle,
+            Token::LParen,
+            Token::Number(5),
+            Token::RParen,
         ]);
     }
 }

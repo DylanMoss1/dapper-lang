@@ -1,0 +1,5 @@
+fun main() {
+    let x = 3.14 in
+    let y = 2.0 in
+    x * y
+}

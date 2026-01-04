@@ -1,4 +1,4 @@
-use crate::ast::{Var, Expr, Opcode, Module, Function};
+use crate::ast::{Var, Expr, Opcode, Module, Function, TypeAnnotation};
 use crate::lexer::Token;
 
 grammar;
@@ -12,15 +12,37 @@ extern {
         "{" => Token::LBrace,
         "}" => Token::RBrace,
         "," => Token::Comma,
+        "<" => Token::LAngle,
+        ">" => Token::RAngle,
+        "|" => Token::Pipe,
         "+" => Token::Plus,
         "-" => Token::Minus,
         "*" => Token::Star,
         "/" => Token::Slash,
+        ":" => Token::Colon,
+        "->" => Token::Arrow,
+        "==" => Token::Equal,
+        "!=" => Token::NotEqual,
+        "<=" => Token::LessEqual,
+        ">=" => Token::GreaterEqual,
         "let" => Token::Let,
         "=" => Token::Assign,
         "in" => Token::In,
         "fun" => Token::Function,
+        "if" => Token::If,
+        "then" => Token::Then,
+        "else" => Token::Else,
+        "int" => Token::TypeInt,
+        "bool" => Token::TypeBool,
+        "string" => Token::TypeString,
+        "unit" => Token::TypeUnit,
+        "float" => Token::TypeFloat,
+        "true" => Token::True,
+        "false" => Token::False,
         Integer => Token::Number(<i32>),
+        FloatLit => Token::FloatLit(<f64>),
+        StringLit => Token::StringLit(<String>),
+        TypeVar => Token::TypeVar(<String>),
         Identifier => Token::Identifier(<String>),
     }
 }
@@ -30,11 +52,38 @@ pub Module: Module = {
 };
 
 Function: Function = {
-    "fun" <fun_name: Identifier> "(" <params: Comma<Identifier>> ")" "{" <body: Expr> "}" => Function {
+    "fun" <fun_name: Identifier> <type_params: TypeParams?> "(" <params: Comma<Param>> ")" <ret: ReturnType?> "{" <body: Expr> "}" => Function {
         name: Var(fun_name),
-        params: params.into_iter().map(Var).collect(),
+        type_params: type_params.unwrap_or_default(),
+        params,
+        return_type: ret,
         body,
     }
+};
+
+Param: (Var, Option<TypeAnnotation>) = {
+    <id: Identifier> <ty: (":" <TypeAnnotation>)?> => (Var(id), ty),
+};
+
+ReturnType: TypeAnnotation = {
+    "->" <TypeAnnotation> => <>,
+};
+
+TypeAnnotation: TypeAnnotation = {
+    <base: TypeBase> => base,
+    <t1: TypeBase> "->" <t2: TypeAnnotation> => {
+        TypeAnnotation::TArrow(Box::new(t1), Box::new(t2))
+    },
+};
+
+TypeBase: TypeAnnotation = {
+    "int" => TypeAnnotation::TName("int".to_string()),
+    "bool" => TypeAnnotation::TName("bool".to_string()),
+    "string" => TypeAnnotation::TName("string".to_string()),
+    "unit" => TypeAnnotation::TName("unit".to_string()),
+    "float" => TypeAnnotation::TName("float".to_string()),
+    <tv: TypeVar> => TypeAnnotation::TVar(tv),
+    "(" <TypeAnnotation> ")" => <>,
 };
 
 Expr: Expr = {
@@ -46,6 +95,52 @@ LetExpr: Expr = {
         bound_var: Var(bound_var),
         bound_expr: Box::new(bound_expr),
         body: Box::new(body),
+    },
+    IfExpr,
+};
+
+IfExpr: Expr = {
+    "if" <condition: Expr> "then" <then_branch: Expr> "else" <else_branch: Expr> => Expr::If {
+        condition: Box::new(condition),
+        then_branch: Box::new(then_branch),
+        else_branch: Box::new(else_branch),
+    },
+    CompareExpr,
+};
+
+CompareExpr: Expr = {
+    <l: AddExpr> "==" <r: AddExpr> => Expr::Op {
+        op: Opcode::Equal,
+        left: Box::new(l),
+        right: Box::new(r),
+    },
+    <l: AddExpr> "!=" <r: AddExpr> => Expr::Op {
+        op: Opcode::NotEqual,
+        left: Box::new(l),
+        right: Box::new(r),
+    },
+    // NOTE: < and > are currently disabled as comparison operators due to ambiguity with generics
+    // They are used for generic type parameters (e.g., foo<int>)
+    // Use <= or >= for now, or we can add dedicated comparison operators later
+    // <l: AddExpr> "<" <r: AddExpr> => Expr::Op {
+    //     op: Opcode::LessThan,
+    //     left: Box::new(l),
+    //     right: Box::new(r),
+    // },
+    // <l: AddExpr> ">" <r: AddExpr> => Expr::Op {
+    //     op: Opcode::GreaterThan,
+    //     left: Box::new(l),
+    //     right: Box::new(r),
+    // },
+    <l: AddExpr> "<=" <r: AddExpr> => Expr::Op {
+        op: Opcode::LessEqual,
+        left: Box::new(l),
+        right: Box::new(r),
+    },
+    <l: AddExpr> ">=" <r: AddExpr> => Expr::Op {
+        op: Opcode::GreaterEqual,
+        left: Box::new(l),
+        right: Box::new(r),
     },
     AddExpr,
 };
@@ -79,12 +174,78 @@ MulExpr: Expr = {
 };
 
 AtomExpr: Expr = {
+    // Literals
     <int: Integer> => Expr::Number(int),
+    <f: FloatLit> => Expr::Float(f),
+    "true" => Expr::Bool(true),
+    "false" => Expr::Bool(false),
+    <s: StringLit> => Expr::String(s),
+    "(" ")" => Expr::Unit,
+
+    // Variables
     <var: Identifier> => Expr::Var(Var(var)),
-    <fun_name: Identifier> "(" <args: Comma<Expr>> ")" => Expr::Apply {
-        fun_name: Var(fun_name),
-        args
+
+    // Closures: |x, y| { body }  (desugars to |x| |y| body)
+    "|" <params: Comma<ClosureParam>> "|" "{" <body: Expr> "}" => {
+        // Build nested lambdas from right to left
+        params.into_iter().rev().fold(body, |acc, (param, param_type)| {
+            Expr::Lambda {
+                param,
+                param_type,
+                body: Box::new(acc),
+            }
+        })
     },
+
+    // Function application - regular
+    <fun_name: Identifier> <type_args: TypeArgs?> "(" <args: Comma<Expr>> ")" => {
+        Expr::Apply {
+            fun_name: Var(fun_name),
+            type_args: type_args.unwrap_or_default(),
+            args,
+            partial: false,
+        }
+    },
+
+    // Function application - partial (ends with , *)
+    <fun_name: Identifier> <type_args: TypeArgs?> "(" <args: CommaWithTrailingStar> ")" => {
+        Expr::Apply {
+            fun_name: Var(fun_name),
+            type_args: type_args.unwrap_or_default(),
+            args,
+            partial: true,
+        }
+    },
+
+    // Parenthesized expressions
+    "(" <Expr> ")" => <>,
+};
+
+// Comma-separated expressions ending with ", *"
+CommaWithTrailingStar: Vec<Expr> = {
+    <v: (<Expr> ",")+> "*" => v,
+};
+
+ClosureParam: (Var, Option<TypeAnnotation>) = {
+    <id: Identifier> <ty: (":" <TypeAnnotation>)?> => (Var(id), ty),
+};
+
+TypeParams: Vec<String> = {
+    "<" <Comma<TypeVar>> ">" => <>
+};
+
+TypeArgs: Vec<String> = {
+    "<" <Comma<TypeArgName>> ">" => <>
+};
+
+TypeArgName: String = {
+    TypeVar => <>,
+    Identifier => <>,
+    "int" => "int".to_string(),
+    "bool" => "bool".to_string(),
+    "string" => "string".to_string(),
+    "unit" => "unit".to_string(),
+    "float" => "float".to_string(),
 };
 
 Comma<T>: Vec<T> = {
