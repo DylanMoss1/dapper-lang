@@ -78,8 +78,8 @@ MulExpr: Expr = {
 };
 
 AtomExpr: Expr = {
-    <Integer> => Expr::Number(<>),
-    <Identifier> => Expr::Var(Var(<>)),
+    <int: Integer> => Expr::Number(int),
+    <var: Identifier> => Expr::Var(Var(var)),
     <fun_name: Identifier> "(" <args: Expr*> ")" => Expr::Apply { 
         fun_name: Var(fun_name), 
         args
