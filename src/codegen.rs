@@ -36,7 +36,7 @@ impl<'ctx> Compiler<'ctx> {
             None => builder.position_at_end(entry),
         }
 
-        builder.build_alloca(self.context.f64_type(), name).unwrap()
+        builder.build_alloca(self.context.i32_type(), name).unwrap()
     }
 
     pub fn build_load(&self, ptr: PointerValue<'ctx>, name: &str) -> BasicValueEnum<'ctx> {
@@ -129,18 +129,34 @@ impl<'ctx> Compiler<'ctx> {
             body,
         } = function;
 
-        let i64_type = self.context.i64_type();
-        let fun_type = i64_type.fn_type(&[], false);
-        let function = self.llvm_module.add_function(&fun_name.0, fun_type, None);
-        let entry = self.context.append_basic_block(function, "entry");
+        // Create parameter types (all i32)
+        let i32_type = self.context.i32_type();
+        let param_types: Vec<_> = params.iter()
+            .map(|_| i32_type.into())
+            .collect();
+
+        // Create function signature with parameters
+        let fun_type = i32_type.fn_type(&param_types, false);
+        let function_value = self.llvm_module.add_function(&fun_name.0, fun_type, None);
+        let entry = self.context.append_basic_block(function_value, "entry");
 
         self.builder.position_at_end(entry);
 
-        let compiled_body = self.compile_expr(body).unwrap();
+        // Set fn_value_opt for this function
+        self.fn_value_opt = Some(function_value);
 
-        let _ = self
-            .builder
-            .build_return(Some(&compiled_body.into_int_value()));
+        // Register parameters as variables
+        self.variable_memory_alloc.clear(); // Clear variables from previous function
+        for (i, param) in params.iter().enumerate() {
+            let llvm_param = function_value.get_nth_param(i as u32).unwrap().into_int_value();
+            let alloca = self.create_entry_block_alloca(&param.0);
+            self.builder.build_store(alloca, llvm_param).unwrap();
+            self.variable_memory_alloc.insert(param, alloca);
+        }
+
+        // Compile function body
+        let compiled_body = self.compile_expr(body)?;
+        self.builder.build_return(Some(&compiled_body.into_int_value())).unwrap();
 
         Ok(())
     }
@@ -173,7 +189,7 @@ pub fn codegen_program(module: &Module) {
 
     codegen.compile_module(module).unwrap();
 
-    type MainFn = unsafe extern "C" fn() -> i64;
+    type MainFn = unsafe extern "C" fn() -> i32;
 
     let main_fn: JitFunction<MainFn> = unsafe {
         codegen

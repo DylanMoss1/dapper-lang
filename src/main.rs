@@ -10,6 +10,7 @@ use crate::lexer::{LexerBridge, Token};
 use crate::parser::ModuleParser;
 
 fn main() {
+    // Test the original example
     let input = "fun x(z) { z + 2 } fun main() { x(1) + 1 }";
 
     let lexer = Token::lexer(input);

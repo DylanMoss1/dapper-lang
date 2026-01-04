@@ -11,6 +11,7 @@ extern {
         ")" => Token::RParen,
         "{" => Token::LBrace,
         "}" => Token::RBrace,
+        "," => Token::Comma,
         "+" => Token::Plus,
         "-" => Token::Minus,
         "*" => Token::Star,
@@ -28,8 +29,8 @@ pub Module: Module = {
     <functions: Function*> => Module(functions),
 };
 
-Function: Function = { 
-    "fun" <fun_name: Identifier> "(" <params: Identifier*> ")" "{" <body: Expr> "}" => Function {
+Function: Function = {
+    "fun" <fun_name: Identifier> "(" <params: Comma<Identifier>> ")" "{" <body: Expr> "}" => Function {
         name: Var(fun_name),
         params: params.into_iter().map(Var).collect(),
         body,
@@ -80,8 +81,18 @@ MulExpr: Expr = {
 AtomExpr: Expr = {
     <int: Integer> => Expr::Number(int),
     <var: Identifier> => Expr::Var(Var(var)),
-    <fun_name: Identifier> "(" <args: Expr*> ")" => Expr::Apply { 
-        fun_name: Var(fun_name), 
+    <fun_name: Identifier> "(" <args: Comma<Expr>> ")" => Expr::Apply {
+        fun_name: Var(fun_name),
         args
     },
+};
+
+Comma<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
 };
