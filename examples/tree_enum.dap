@@ -1,0 +1,14 @@
+type Tree<'a> = Leaf | Branch('a, Tree<'a>, Tree<'a>)
+
+fun makeLeaf() {
+    Leaf()
+}
+
+fun makeBranch(value: int) {
+    Branch(value, Leaf(), Leaf())
+}
+
+fun main() {
+    let tree = makeBranch(42) in
+    0
+}

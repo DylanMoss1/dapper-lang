@@ -7,7 +7,7 @@ pub mod lexer;
 pub mod types;
 pub mod typechecker;
 
-pub use crate::ast::{Expr, Function, Module, Opcode, TypeAnnotation, Var};
+pub use crate::ast::{Expr, Function, Module, Opcode, TypeAnnotation, Var, TypeDef, EnumVariant};
 pub use crate::lexer::{LexerBridge, Token};
 pub use crate::parser::ModuleParser;
 pub use crate::types::{Type, TypeEnv, TypeScheme, TypeVar};
@@ -30,8 +30,8 @@ mod tests {
         let result = parse("fun main() { 42 }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0.len(), 1);
-        assert_eq!(module.0[0].name, Var("main".to_string()));
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].name, Var("main".to_string()));
     }
 
     #[test]
@@ -45,8 +45,8 @@ mod tests {
         let result = parse("fun foo() { 10 }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0.len(), 1);
-        assert_eq!(module.0[0].params.len(), 0);
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].params.len(), 0);
     }
 
     #[test]
@@ -54,9 +54,9 @@ mod tests {
         let result = parse("fun double(x) { x + x }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0.len(), 1);
-        assert_eq!(module.0[0].params.len(), 1);
-        assert_eq!(module.0[0].params[0].0, Var("x".to_string()));
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].params.len(), 1);
+        assert_eq!(module.functions[0].params[0].0, Var("x".to_string()));
     }
 
     #[test]
@@ -64,11 +64,11 @@ mod tests {
         let result = parse("fun add(a, b, c) { a + b + c }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0.len(), 1);
-        assert_eq!(module.0[0].params.len(), 3);
-        assert_eq!(module.0[0].params[0].0, Var("a".to_string()));
-        assert_eq!(module.0[0].params[1].0, Var("b".to_string()));
-        assert_eq!(module.0[0].params[2].0, Var("c".to_string()));
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].params.len(), 3);
+        assert_eq!(module.functions[0].params[0].0, Var("a".to_string()));
+        assert_eq!(module.functions[0].params[1].0, Var("b".to_string()));
+        assert_eq!(module.functions[0].params[2].0, Var("c".to_string()));
     }
 
     #[test]
@@ -106,9 +106,9 @@ mod tests {
         let result = parse("fun add(a, b) { a + b } fun main() { add(1, 2) }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0.len(), 2);
-        assert_eq!(module.0[0].name, Var("add".to_string()));
-        assert_eq!(module.0[1].name, Var("main".to_string()));
+        assert_eq!(module.functions.len(), 2);
+        assert_eq!(module.functions[0].name, Var("add".to_string()));
+        assert_eq!(module.functions[1].name, Var("main".to_string()));
     }
 
     #[test]
@@ -124,7 +124,7 @@ mod tests {
         assert!(result.is_ok());
         let module = result.unwrap();
         // Verify it parses as 1 + (2 * 3), not (1 + 2) * 3
-        match &module.0[0].body {
+        match &module.functions[0].body {
             Expr::Op { op, left, right } => {
                 assert!(matches!(op, Opcode::Add));
                 assert!(matches!(**left, Expr::Number(1)));
@@ -148,7 +148,7 @@ mod tests {
         let result = parse("fun add(a, b,) { a + b }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0[0].params.len(), 2);
+        assert_eq!(module.functions[0].params.len(), 2);
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
         let result = parse("");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0.len(), 0);
+        assert_eq!(module.functions.len(), 0);
     }
 
     #[test]
@@ -164,8 +164,8 @@ mod tests {
         let result = parse("fun id<'a>(x) { x }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0[0].type_params, vec!["a".to_string()]);
-        assert_eq!(module.0[0].params.len(), 1);
+        assert_eq!(module.functions[0].type_params, vec!["a".to_string()]);
+        assert_eq!(module.functions[0].params.len(), 1);
     }
 
     #[test]
@@ -173,9 +173,9 @@ mod tests {
         let result = parse("fun pair<'a, 'b>(a, b) { a + b }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert_eq!(module.0[0].type_params.len(), 2);
-        assert_eq!(module.0[0].type_params[0], "a");
-        assert_eq!(module.0[0].type_params[1], "b");
+        assert_eq!(module.functions[0].type_params.len(), 2);
+        assert_eq!(module.functions[0].type_params[0], "a");
+        assert_eq!(module.functions[0].type_params[1], "b");
     }
 
     #[test]
@@ -183,7 +183,7 @@ mod tests {
         let result = parse("fun add(a, b) { a + b }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        assert!(module.0[0].type_params.is_empty());
+        assert!(module.functions[0].type_params.is_empty());
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod tests {
         let result = parse("fun main() { id<int>(5) }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        match &module.0[0].body {
+        match &module.functions[0].body {
             Expr::Apply { type_args, .. } => {
                 assert_eq!(type_args.len(), 1);
                 assert_eq!(type_args[0], "int");
@@ -205,7 +205,7 @@ mod tests {
         let result = parse("fun main() { id(5) }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        match &module.0[0].body {
+        match &module.functions[0].body {
             Expr::Apply { type_args, .. } => {
                 assert!(type_args.is_empty());
             }
@@ -218,7 +218,7 @@ mod tests {
         let result = parse("fun main() { pair<int, bool>(1, 2) }");
         assert!(result.is_ok());
         let module = result.unwrap();
-        match &module.0[0].body {
+        match &module.functions[0].body {
             Expr::Apply { type_args, .. } => {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(type_args[0], "int");

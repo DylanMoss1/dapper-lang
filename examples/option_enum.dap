@@ -1,0 +1,14 @@
+type Option<'a> = None | Some('a)
+
+fun makeNone() {
+    None()
+}
+
+fun makeSome(value: int) {
+    Some(value)
+}
+
+fun main() {
+    let opt = makeSome(10) in
+    opt
+}

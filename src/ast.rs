@@ -7,6 +7,7 @@ pub enum TypeAnnotation {
     TName(String),                                    // int, bool, string, unit, float
     TArrow(Box<TypeAnnotation>, Box<TypeAnnotation>), // T1 -> T2
     TVar(String),                                     // Generic type variable 'a, 'b, etc.
+    TApp(String, Vec<TypeAnnotation>),                // Type application: Tree<'a>
 }
 
 #[derive(Debug)]
@@ -59,6 +60,12 @@ pub enum Expr {
         param_type: Option<TypeAnnotation>,
         body: Box<Expr>,
     },
+
+    // Enum variant constructor
+    Constructor {
+        variant_name: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]
@@ -87,8 +94,26 @@ pub struct Function {
     pub body: Expr,
 }
 
+/// Enum variant definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub fields: Vec<TypeAnnotation>,
+}
+
+/// Type definition (currently only for enums)
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeDef {
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub variants: Vec<EnumVariant>,
+}
+
 #[derive(Debug)]
-pub struct Module(pub Vec<Function>);
+pub struct Module {
+    pub type_defs: Vec<TypeDef>,
+    pub functions: Vec<Function>,
+}
 
 #[cfg(test)]
 mod tests {
@@ -150,8 +175,11 @@ mod tests {
             body: Expr::Var(Var("x".to_string())),
         };
 
-        let module = Module(vec![func1, func2]);
-        assert_eq!(module.0.len(), 2);
+        let module = Module {
+            type_defs: vec![],
+            functions: vec![func1, func2],
+        };
+        assert_eq!(module.functions.len(), 2);
     }
 
     #[test]

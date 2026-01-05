@@ -106,7 +106,7 @@ fn compile_and_run(source: &str) -> Result<(), String> {
 
     println!("Type checking passed ✓");
     println!("Inferred types:");
-    for func in &module.0 {
+    for func in &module.functions {
         if let Some(scheme) = type_env.lookup(&func.name) {
             println!("  {}: {}", func.name.0, scheme.display());
         }
@@ -143,7 +143,7 @@ fn compile_to_ir(source: &str, output_path: &PathBuf) -> Result<(), String> {
 
     println!("Type checking passed ✓");
     println!("Inferred types:");
-    for func in &module.0 {
+    for func in &module.functions {
         if let Some(scheme) = type_env.lookup(&func.name) {
             println!("  {}: {}", func.name.0, scheme.display());
         }

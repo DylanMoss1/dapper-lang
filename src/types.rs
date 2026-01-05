@@ -1,4 +1,4 @@
-use crate::ast::Var;
+use crate::ast::{Var, TypeDef, EnumVariant};
 use std::collections::{HashMap, HashSet};
 
 /// Type representation for Hindley-Milner type system
@@ -19,6 +19,9 @@ pub enum Type {
 
     // Polymorphic types: forall a. T
     TForall(Vec<TypeVar>, Box<Type>),
+
+    // Enum/ADT types: e.g., Tree<'a>
+    TEnum(String, Vec<Type>), // (type name, type arguments)
 }
 
 impl Type {
@@ -40,6 +43,13 @@ impl Type {
                 let mut set = ty.free_type_vars();
                 for q in quantifiers {
                     set.remove(q);
+                }
+                set
+            }
+            Type::TEnum(_, args) => {
+                let mut set = HashSet::new();
+                for arg in args {
+                    set.extend(arg.free_type_vars());
                 }
                 set
             }
@@ -65,6 +75,14 @@ impl Type {
             Type::TForall(quantifiers, ty) => {
                 let vars: Vec<_> = quantifiers.iter().map(|v| v.display()).collect();
                 format!("forall {}. {}", vars.join(" "), ty.display())
+            }
+            Type::TEnum(name, args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let args_str: Vec<_> = args.iter().map(|t| t.display()).collect();
+                    format!("{}<{}>", name, args_str.join(", "))
+                }
             }
         }
     }
@@ -134,11 +152,21 @@ impl TypeScheme {
     }
 }
 
+/// Information about an enum variant constructor
+#[derive(Debug, Clone)]
+pub struct VariantInfo {
+    pub type_name: String,
+    pub type_params: Vec<String>,
+    pub field_types: Vec<crate::ast::TypeAnnotation>,
+}
+
 /// Type environment for type checking
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
     bindings: HashMap<Var, TypeScheme>,
     type_params: HashSet<String>, // Track generic type parameters in scope
+    type_defs: HashMap<String, TypeDef>, // Type definitions
+    constructors: HashMap<String, VariantInfo>, // Variant constructors
 }
 
 impl TypeEnv {
@@ -146,6 +174,8 @@ impl TypeEnv {
         TypeEnv {
             bindings: HashMap::new(),
             type_params: HashSet::new(),
+            type_defs: HashMap::new(),
+            constructors: HashMap::new(),
         }
     }
 
@@ -163,6 +193,33 @@ impl TypeEnv {
 
     pub fn has_type_param(&self, param: &str) -> bool {
         self.type_params.contains(param)
+    }
+
+    pub fn add_type_def(&mut self, type_def: TypeDef) {
+        let type_name = type_def.name.clone();
+        let type_params = type_def.type_params.clone();
+
+        // Register each variant as a constructor
+        for variant in &type_def.variants {
+            self.constructors.insert(
+                variant.name.clone(),
+                VariantInfo {
+                    type_name: type_name.clone(),
+                    type_params: type_params.clone(),
+                    field_types: variant.fields.clone(),
+                },
+            );
+        }
+
+        self.type_defs.insert(type_name, type_def);
+    }
+
+    pub fn lookup_constructor(&self, name: &str) -> Option<&VariantInfo> {
+        self.constructors.get(name)
+    }
+
+    pub fn lookup_type_def(&self, name: &str) -> Option<&TypeDef> {
+        self.type_defs.get(name)
     }
 
     /// Get all free type variables in the environment

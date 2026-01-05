@@ -59,6 +59,10 @@ pub enum Token {
     #[token("fun")]
     Function,
 
+    // Type definitions
+    #[token("type", priority = 2)]
+    Type,
+
     // Conditionals
     #[token("if")]
     If,

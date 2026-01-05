@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Function, Module, TypeAnnotation, Var};
+use crate::ast::{Expr, Function, Module, TypeAnnotation, Var, TypeDef};
 use crate::types::{Type, TypeEnv, TypeScheme, TypeVar};
 use std::collections::HashMap;
 
@@ -80,6 +80,10 @@ impl TypeChecker {
             Type::TForall(vars, t) => {
                 Type::TForall(vars.clone(), Box::new(self.apply_substitution(t)))
             }
+            Type::TEnum(name, args) => {
+                let new_args: Vec<_> = args.iter().map(|t| self.apply_substitution(t)).collect();
+                Type::TEnum(name.clone(), new_args)
+            }
             _ => ty.clone(),
         }
     }
@@ -126,6 +130,20 @@ impl TypeChecker {
                 self.unify(*r1, *r2)
             }
 
+            // Enum type unification
+            (Type::TEnum(n1, args1), Type::TEnum(n2, args2)) => {
+                if n1 != n2 {
+                    return Err(TypeError::Mismatch(t1, t2));
+                }
+                if args1.len() != args2.len() {
+                    return Err(TypeError::Mismatch(t1, t2));
+                }
+                for (a1, a2) in args1.into_iter().zip(args2.into_iter()) {
+                    self.unify(a1, a2)?;
+                }
+                Ok(())
+            }
+
             // Mismatch
             _ => Err(TypeError::Mismatch(t1, t2)),
         }
@@ -144,7 +162,14 @@ impl TypeChecker {
                 "string" => Ok(Type::TString),
                 "unit" => Ok(Type::TUnit),
                 "float" => Ok(Type::TFloat),
-                _ => Err(TypeError::UnknownType(name.clone())),
+                _ => {
+                    // Check if it's a defined type (enum)
+                    if env.lookup_type_def(name).is_some() {
+                        Ok(Type::TEnum(name.clone(), vec![]))
+                    } else {
+                        Err(TypeError::UnknownType(name.clone()))
+                    }
+                }
             },
             TypeAnnotation::TArrow(t1, t2) => {
                 let ty1 = self.annotation_to_type(t1, env)?;
@@ -161,6 +186,14 @@ impl TypeChecker {
                 } else {
                     Err(TypeError::UnknownType(format!("'{}", name)))
                 }
+            }
+            TypeAnnotation::TApp(name, args) => {
+                // Type application like Tree<'a>
+                let arg_types: Result<Vec<_>, _> = args
+                    .iter()
+                    .map(|arg| self.annotation_to_type(arg, env))
+                    .collect();
+                Ok(Type::TEnum(name.clone(), arg_types?))
             }
         }
     }
@@ -330,6 +363,43 @@ impl TypeChecker {
             Expr::PartialPlaceholder => Err(TypeError::UnknownType(
                 "Partial placeholder should not appear in expressions".to_string(),
             )),
+
+            // Enum variant constructor
+            Expr::Constructor { variant_name, args } => {
+                // Look up the constructor info
+                let variant_info = env
+                    .lookup_constructor(variant_name)
+                    .ok_or_else(|| TypeError::UnboundVariable(Var(variant_name.clone())))?;
+
+                // Build environment with type parameters
+                let mut constructor_env = env.clone();
+                for type_param in &variant_info.type_params {
+                    constructor_env.add_type_param(type_param.clone());
+                }
+
+                // Check argument count
+                if args.len() != variant_info.field_types.len() {
+                    return Err(TypeError::TooManyArgs);
+                }
+
+                // Infer argument types and check against field types
+                let mut type_arg_map: HashMap<String, Type> = HashMap::new();
+                for (arg, field_ann) in args.iter().zip(variant_info.field_types.iter()) {
+                    let arg_ty = self.infer_expr(arg, env)?;
+                    let field_ty = self.annotation_to_type(field_ann, &constructor_env)?;
+                    self.unify(arg_ty, field_ty)?;
+                }
+
+                // Build the result type (enum type with type arguments)
+                // For now, use fresh type variables for the type parameters
+                let type_args: Vec<_> = variant_info
+                    .type_params
+                    .iter()
+                    .map(|_| Type::TVar(self.fresh_var()))
+                    .collect();
+
+                Ok(Type::TEnum(variant_info.type_name.clone(), type_args))
+            }
         }
     }
 
@@ -476,13 +546,18 @@ impl TypeChecker {
     pub fn check_module(&mut self, module: &Module) -> Result<TypeEnv, TypeError> {
         let mut env = TypeEnv::new();
 
-        // First pass: collect function signatures
-        for func in &module.0 {
+        // First pass: register type definitions
+        for type_def in &module.type_defs {
+            env.add_type_def(type_def.clone());
+        }
+
+        // Second pass: collect function signatures
+        for func in &module.functions {
             let scheme = self.generalize_function(func, &env)?;
             env.insert(func.name.clone(), scheme);
         }
 
-        // Second pass: check function bodies (already done in generalize_function)
+        // Third pass: check function bodies (already done in generalize_function)
         // This ensures all types are consistent
 
         Ok(env)
@@ -676,6 +751,12 @@ impl UsageAnalyzer {
 
             Expr::Lambda { body, .. } => {
                 self.analyze_expr(body);
+            }
+
+            Expr::Constructor { args, .. } => {
+                for arg in args {
+                    self.analyze_expr(arg);
+                }
             }
 
             // Literals and variables don't contain function calls

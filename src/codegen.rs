@@ -82,6 +82,14 @@ impl<'ctx> Compiler<'ctx> {
                 self.context.i32_type().into()
             }
             Type::TForall(_, inner) => self.type_to_llvm(inner), // Look through forall
+            Type::TEnum(_, _) => {
+                // Enums are represented as tagged unions (pointers for now)
+                // TODO: Implement proper enum representation
+                self.context
+                    .i8_type()
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .into()
+            }
         }
     }
 
@@ -537,6 +545,14 @@ impl<'ctx> Compiler<'ctx> {
             },
 
             Expr::PartialPlaceholder => Err("Partial placeholder should not appear in expressions"),
+
+            Expr::Constructor { variant_name, args } => {
+                // For now, we'll represent enum constructors as simple structs or integers
+                // TODO: Implement proper enum representation with tagged unions
+                // For simplicity, we'll just return a null pointer for now
+                let ptr_type = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().as_any_value_enum())
+            }
         }
     }
 
@@ -636,7 +652,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn compile_module(&mut self, module: &'ctx Module) -> Result<(), &'static str> {
-        for function in &module.0 {
+        for function in &module.functions {
             self.compile_function(function)?;
         }
 

@@ -1,4 +1,4 @@
-use crate::ast::{Var, Expr, Opcode, Module, Function, TypeAnnotation};
+use crate::ast::{Var, Expr, Opcode, Module, Function, TypeAnnotation, TypeDef, EnumVariant};
 use crate::lexer::Token;
 
 grammar;
@@ -29,6 +29,7 @@ extern {
         "=" => Token::Assign,
         "in" => Token::In,
         "fun" => Token::Function,
+        "type" => Token::Type,
         "if" => Token::If,
         "then" => Token::Then,
         "else" => Token::Else,
@@ -47,8 +48,30 @@ extern {
     }
 }
 
-pub Module: Module = { 
-    <functions: Function*> => Module(functions),
+pub Module: Module = {
+    <type_defs: TypeDef*> <functions: Function*> => Module {
+        type_defs,
+        functions,
+    },
+};
+
+TypeDef: TypeDef = {
+    "type" <name: Identifier> <type_params: TypeParams?> "=" <variants: PipeList<EnumVariant>> => TypeDef {
+        name,
+        type_params: type_params.unwrap_or_default(),
+        variants,
+    }
+};
+
+EnumVariant: EnumVariant = {
+    <name: Identifier> "(" <fields: Comma<TypeAnnotation>> ")" => EnumVariant {
+        name,
+        fields,
+    },
+    <name: Identifier> => EnumVariant {
+        name,
+        fields: vec![],
+    },
 };
 
 Function: Function = {
@@ -83,6 +106,10 @@ TypeBase: TypeAnnotation = {
     "unit" => TypeAnnotation::TName("unit".to_string()),
     "float" => TypeAnnotation::TName("float".to_string()),
     <tv: TypeVar> => TypeAnnotation::TVar(tv),
+    // Type application: Tree<'a, int>
+    <name: Identifier> "<" <args: Comma<TypeAnnotation>> ">" => TypeAnnotation::TApp(name, args),
+    // Simple type name
+    <name: Identifier> => TypeAnnotation::TName(name),
     "(" <TypeAnnotation> ")" => <>,
 };
 
@@ -255,5 +282,12 @@ Comma<T>: Vec<T> = {
             v.push(e);
             v
         }
+    }
+};
+
+PipeList<T>: Vec<T> = {
+    <mut v:(<T> "|")*> <e:T> => {
+        v.push(e);
+        v
     }
 };
