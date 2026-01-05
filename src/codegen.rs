@@ -77,12 +77,40 @@ impl<'ctx> Compiler<'ctx> {
             Type::TUnit => self.context.i8_type().into(), // Unit as i8
             Type::TVar(_) => self.context.i32_type().into(), // Default to i32 for type variables
             Type::TArrow(_, _) => {
-                // Functions are represented as function pointers (for now, i32)
-                // TODO: Implement proper closure types
-                self.context.i32_type().into()
+                // Implement proper closure types using function pointers
+                // Extract parameter types and return type from the arrow chain
+                let (param_types, return_type) = self.extract_function_signature(ty);
+
+                // Convert parameter types to LLVM types
+                let param_llvm_types: Vec<BasicMetadataTypeEnum> = param_types
+                    .iter()
+                    .map(|pt| self.type_to_llvm(pt).into())
+                    .collect();
+
+                // Convert return type to LLVM type
+                let return_llvm_type = self.type_to_llvm(&return_type);
+
+                // Create function type and return it as a pointer
+                let fn_type = return_llvm_type.fn_type(&param_llvm_types, false);
+                fn_type.ptr_type(inkwell::AddressSpace::default()).into()
             }
             Type::TForall(_, inner) => self.type_to_llvm(inner), // Look through forall
         }
+    }
+
+    /// Extract parameter types and return type from a function type (TArrow chain)
+    fn extract_function_signature(&self, ty: &Type) -> (Vec<Type>, Type) {
+        let mut param_types = Vec::new();
+        let mut current = ty.clone();
+
+        // Unpack the arrow type chain to get parameter types
+        while let Type::TArrow(param, rest) = current {
+            param_types.push(*param);
+            current = *rest;
+        }
+
+        // The final type is the return type
+        (param_types, current)
     }
 
     fn create_entry_block_alloca(&self, name: &str, ty: &Type) -> PointerValue<'ctx> {
@@ -124,52 +152,59 @@ impl<'ctx> Compiler<'ctx> {
                 let bound_type = self.infer_type(bound_expr);
                 let compiled_body = self.compile_expr(bound_expr).unwrap();
 
-                // Check if the bound expression is a function (lambda)
-                // For now, we'll just skip storing lambdas in memory
-                // A full implementation would need proper closure support
-                if compiled_body.is_function_value() {
-                    // Skip storing function values for now
-                    // TODO: Implement proper function pointer storage
-                } else {
-                    let alloca = self.create_entry_block_alloca(var_name, &bound_type);
+                let alloca = self.create_entry_block_alloca(var_name, &bound_type);
 
-                    // Store the value based on its type
-                    match bound_type {
-                        Type::TInt => {
-                            self.builder
-                                .build_store(alloca, compiled_body.into_int_value())
-                                .unwrap();
-                        }
-                        Type::TFloat => {
-                            self.builder
-                                .build_store(alloca, compiled_body.into_float_value())
-                                .unwrap();
-                        }
-                        Type::TBool => {
-                            self.builder
-                                .build_store(alloca, compiled_body.into_int_value())
-                                .unwrap();
-                        }
-                        Type::TString => {
-                            self.builder
-                                .build_store(alloca, compiled_body.into_pointer_value())
-                                .unwrap();
-                        }
-                        Type::TUnit => {
-                            self.builder
-                                .build_store(alloca, compiled_body.into_int_value())
-                                .unwrap();
-                        }
-                        _ => {
-                            self.builder
-                                .build_store(alloca, compiled_body.into_int_value())
-                                .unwrap();
+                // Store the value based on its type
+                match bound_type {
+                    Type::TInt => {
+                        self.builder
+                            .build_store(alloca, compiled_body.into_int_value())
+                            .unwrap();
+                    }
+                    Type::TFloat => {
+                        self.builder
+                            .build_store(alloca, compiled_body.into_float_value())
+                            .unwrap();
+                    }
+                    Type::TBool => {
+                        self.builder
+                            .build_store(alloca, compiled_body.into_int_value())
+                            .unwrap();
+                    }
+                    Type::TString => {
+                        self.builder
+                            .build_store(alloca, compiled_body.into_pointer_value())
+                            .unwrap();
+                    }
+                    Type::TUnit => {
+                        self.builder
+                            .build_store(alloca, compiled_body.into_int_value())
+                            .unwrap();
+                    }
+                    Type::TArrow(_, _) => {
+                        // Proper function pointer storage
+                        // Function values are represented as pointers, so we can store them directly
+                        if compiled_body.is_function_value() {
+                            // Convert function to pointer value
+                            let fn_ptr = compiled_body.into_function_value().as_global_value().as_pointer_value();
+                            self.builder.build_store(alloca, fn_ptr).unwrap();
+                        } else if compiled_body.is_pointer_value() {
+                            // Already a pointer (e.g., from a variable lookup)
+                            self.builder.build_store(alloca, compiled_body.into_pointer_value()).unwrap();
+                        } else {
+                            // Fallback - shouldn't normally reach here
+                            self.builder.build_store(alloca, compiled_body.into_int_value()).unwrap();
                         }
                     }
-
-                    self.variable_memory_alloc.insert(bound_var, alloca);
-                    self.variable_types.insert(bound_var.clone(), bound_type);
+                    _ => {
+                        self.builder
+                            .build_store(alloca, compiled_body.into_int_value())
+                            .unwrap();
+                    }
                 }
+
+                self.variable_memory_alloc.insert(bound_var, alloca);
+                self.variable_types.insert(bound_var.clone(), bound_type);
 
                 self.compile_expr(body)
             }
@@ -378,9 +413,151 @@ impl<'ctx> Compiler<'ctx> {
                 // For now, just ignore type_args and compile normally
                 let _ = type_args; // Silence unused warning
 
-                // TODO: Handle partial application
+                // Handle partial application by creating a closure
                 if *partial {
-                    return Err("Partial application not yet implemented in codegen");
+                    // Find which arguments are placeholders
+                    let placeholder_indices: Vec<usize> = args
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, arg)| {
+                            if matches!(arg, Expr::PartialPlaceholder) {
+                                Some(i)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if placeholder_indices.is_empty() {
+                        return Err("Partial application requires at least one placeholder");
+                    }
+
+                    // Get the function's type to infer parameter types
+                    let func_scheme = self.type_env.lookup(fun_name)
+                        .ok_or("Function not found in type environment")?;
+                    let func_type = self.type_checker.apply_substitution(&func_scheme.ty);
+
+                    // Extract parameter types from the function type
+                    let (param_types, return_type) = self.extract_function_signature(&func_type);
+
+                    // Generate a unique name for the partial application closure
+                    let closure_name = format!("partial_{}_{}", fun_name.0, self.lambda_counter);
+                    self.lambda_counter += 1;
+
+                    // Get types for the placeholder parameters
+                    let closure_param_types: Vec<Type> = placeholder_indices
+                        .iter()
+                        .map(|&i| param_types.get(i).cloned().unwrap_or(Type::TInt))
+                        .collect();
+
+                    // Convert to LLVM types
+                    let closure_param_llvm_types: Vec<BasicMetadataTypeEnum> = closure_param_types
+                        .iter()
+                        .map(|ty| self.type_to_llvm(ty).into())
+                        .collect();
+
+                    let return_llvm_type = self.type_to_llvm(&return_type);
+
+                    // Create closure function
+                    let closure_fn_type = return_llvm_type.fn_type(&closure_param_llvm_types, false);
+                    let closure_fn = self.llvm_module.add_function(&closure_name, closure_fn_type, None);
+                    let closure_entry = self.context.append_basic_block(closure_fn, "entry");
+
+                    // Save current context
+                    let saved_fn = self.fn_value_opt;
+                    let saved_vars = self.variable_memory_alloc.clone();
+                    let saved_var_types = self.variable_types.clone();
+
+                    // Set up closure context
+                    self.fn_value_opt = Some(closure_fn);
+                    self.builder.position_at_end(closure_entry);
+
+                    // Compile the non-placeholder arguments (these are captured)
+                    let mut captured_values = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        if !matches!(arg, Expr::PartialPlaceholder) {
+                            captured_values.push((i, self.compile_expr(arg)?));
+                        }
+                    }
+
+                    // Restore variable context for accessing captured values
+                    self.variable_memory_alloc = saved_vars.clone();
+                    self.variable_types = saved_var_types.clone();
+
+                    // Build the call to the original function with all arguments
+                    let original_fn = self.llvm_module.get_function(&fun_name.0).unwrap();
+                    let mut call_args: Vec<BasicMetadataValueEnum> = Vec::new();
+
+                    let mut placeholder_param_idx = 0;
+                    for (i, arg) in args.iter().enumerate() {
+                        if matches!(arg, Expr::PartialPlaceholder) {
+                            // Use the closure parameter
+                            let param = closure_fn.get_nth_param(placeholder_param_idx as u32).unwrap();
+                            let param_type = &closure_param_types[placeholder_param_idx];
+                            call_args.push(match param_type {
+                                Type::TFloat => BasicMetadataValueEnum::FloatValue(param.into_float_value()),
+                                Type::TString => BasicMetadataValueEnum::PointerValue(param.into_pointer_value()),
+                                _ => BasicMetadataValueEnum::IntValue(param.into_int_value()),
+                            });
+                            placeholder_param_idx += 1;
+                        } else {
+                            // Use the captured value
+                            let (_, captured_val) = captured_values
+                                .iter()
+                                .find(|(idx, _)| *idx == i)
+                                .unwrap();
+                            let arg_type = &param_types[i];
+                            call_args.push(match arg_type {
+                                Type::TFloat => BasicMetadataValueEnum::FloatValue(captured_val.into_float_value()),
+                                Type::TString => BasicMetadataValueEnum::PointerValue(captured_val.into_pointer_value()),
+                                _ => BasicMetadataValueEnum::IntValue(captured_val.into_int_value()),
+                            });
+                        }
+                    }
+
+                    let call_site = self
+                        .builder
+                        .build_call(original_fn, &call_args, "partial_call")
+                        .unwrap();
+
+                    // Extract the return value and build return
+                    match call_site.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(basic_val) => {
+                            match basic_val {
+                                inkwell::values::BasicValueEnum::IntValue(v) => {
+                                    self.builder.build_return(Some(&v)).unwrap();
+                                }
+                                inkwell::values::BasicValueEnum::FloatValue(v) => {
+                                    self.builder.build_return(Some(&v)).unwrap();
+                                }
+                                inkwell::values::BasicValueEnum::PointerValue(v) => {
+                                    self.builder.build_return(Some(&v)).unwrap();
+                                }
+                                _ => {
+                                    // Other basic types, try to return as-is
+                                    self.builder.build_return(Some(&basic_val)).unwrap();
+                                }
+                            }
+                        }
+                        _ => {
+                            // Void or other non-basic type
+                            self.builder.build_return(None).unwrap();
+                        }
+                    }
+
+                    // Restore original context
+                    self.fn_value_opt = saved_fn;
+                    self.variable_memory_alloc = saved_vars;
+                    self.variable_types = saved_var_types;
+
+                    if let Some(current_fn) = saved_fn {
+                        if let Some(current_block) = current_fn.get_last_basic_block() {
+                            self.builder.position_at_end(current_block);
+                        }
+                    }
+
+                    // Return the closure function as a value
+                    return Ok(closure_fn.as_global_value().as_any_value_enum());
                 }
 
                 let fun = self.llvm_module.get_function(&fun_name.0).unwrap();
